@@ -1,0 +1,673 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>VOLTMAP — EV Grid Intelligence</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { width: 100%; height: 100%; background: #0a0c0f; overflow: hidden; font-family: 'DM Sans', sans-serif; }
+
+    .app {
+      color: #e8eaed;
+      width: 100vw; height: 100vh;
+      display: grid;
+      grid-template-columns: 210px 1fr 210px;
+      grid-template-rows: 44px 1fr 110px;
+    }
+
+    /* Topbar */
+    .topbar {
+      grid-column: 1/-1;
+      background: #111418;
+      border-bottom: 1px solid #1e2128;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 20px; z-index: 1000;
+    }
+    .topbar-left { display: flex; align-items: center; gap: 14px; }
+    .logo { font-family: 'DM Mono', monospace; font-size: 14px; font-weight: 500; color: #c8f562; letter-spacing: 2px; }
+    .tagline { font-size: 10px; color: #333; font-family: 'DM Mono', monospace; letter-spacing: 1px; }
+    .live-pill { display: flex; align-items: center; gap: 6px; font-size: 10px; color: #6ee7b7; font-family: 'DM Mono', monospace; }
+    .pulse { width: 6px; height: 6px; border-radius: 50%; background: #6ee7b7; animation: blink 1.4s infinite; }
+    @keyframes blink { 0%,100%{opacity:1}50%{opacity:.25} }
+    #clock { font-family: 'DM Mono', monospace; font-size: 11px; color: #555; }
+
+    /* Sidebars */
+    .sidebar-left, .sidebar-right {
+      background: #111418; padding: 14px 12px;
+      display: flex; flex-direction: column; gap: 8px;
+      overflow: hidden; z-index: 500;
+    }
+    .sidebar-left { border-right: 1px solid #1e2128; }
+    .sidebar-right { border-left: 1px solid #1e2128; }
+
+    .section-label {
+      font-size: 9px; font-family: 'DM Mono', monospace;
+      color: #3a3f48; letter-spacing: 1.8px; text-transform: uppercase; margin-top: 4px;
+    }
+    .nav-item {
+      display: flex; align-items: center; gap: 8px;
+      padding: 7px 8px; border-radius: 6px; cursor: pointer;
+      font-size: 12px; color: #666; transition: all .15s; user-select: none;
+    }
+    .nav-item:hover { background: #1a1f27; color: #ccc; }
+    .nav-item.active { background: #1a1f27; color: #c8f562; }
+    .nav-dot { width: 6px; height: 6px; border-radius: 50%; background: #2a2f38; flex-shrink: 0; }
+    .nav-item.active .nav-dot { background: #c8f562; }
+
+    .toggle-row { display: flex; align-items: center; justify-content: space-between; padding: 3px 0; }
+    .toggle-label { font-size: 11px; color: #777; display: flex; align-items: center; gap: 6px; }
+    .t-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+    .toggle {
+      width: 28px; height: 15px; border-radius: 8px;
+      background: #222; border: none; cursor: pointer;
+      position: relative; transition: background .2s; flex-shrink: 0;
+    }
+    .toggle.on { background: #c8f562; }
+    .toggle::after {
+      content:''; position:absolute; top:2px; left:2px;
+      width:11px; height:11px; border-radius:50%; background:#0d0f12; transition:left .2s;
+    }
+    .toggle.on::after { left: 15px; }
+
+    .filter-select {
+      width: 100%; background: #1a1f27; border: 1px solid #2a2f38;
+      border-radius: 5px; color: #999; font-size: 11px; padding: 5px 7px;
+      font-family: 'DM Mono', monospace; cursor: pointer; appearance: none;
+    }
+    .filter-select:focus { outline: none; border-color: #c8f562; color: #e8eaed; }
+
+    /* Map area */
+    .map-area { position: relative; overflow: hidden; background: #0a0c0f; z-index: 1; }
+    #leafletMap { width: 100%; height: 100%; }
+
+    /* Draggable generation mix panel */
+    .map-overlay {
+      position: absolute; top: 12px; left: 12px;
+      background: rgba(13,15,18,0.95);
+      border: 1px solid #2a2f38;
+      border-radius: 8px; padding: 0;
+      min-width: 180px; z-index: 1000;
+      user-select: none;
+    }
+    .overlay-handle {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 8px 12px 6px;
+      cursor: grab; border-bottom: 1px solid #1e2128;
+      border-radius: 8px 8px 0 0;
+    }
+    .overlay-handle:active { cursor: grabbing; }
+    .overlay-handle-title {
+      font-size: 9px; font-family: 'DM Mono', monospace;
+      color: #3a3f48; letter-spacing: 1.5px; text-transform: uppercase;
+    }
+    .drag-hint { font-size: 9px; color: #2a2f38; font-family: 'DM Mono', monospace; }
+    .overlay-body { padding: 10px 12px 12px; }
+
+    .gen-row { display: flex; align-items: center; gap: 6px; margin-bottom: 5px; font-size: 11px; }
+    .gen-name { width: 72px; flex-shrink: 0; }
+    .gen-bar-wrap { flex: 1; height: 3px; background: #1e2128; border-radius: 2px; }
+    .gen-bar { height: 3px; border-radius: 2px; transition: width .8s ease; }
+    .gen-pct { font-family: 'DM Mono', monospace; font-size: 10px; color: #555; min-width: 28px; text-align: right; }
+
+    /* Custom Leaflet station marker tooltip */
+    .station-tooltip {
+      background: #111418 !important; border: 1px solid #2a2f38 !important;
+      border-radius: 8px !important; color: #e8eaed !important;
+      font-family: 'DM Mono', monospace !important; font-size: 10px !important;
+      padding: 8px 11px !important; box-shadow: none !important;
+      line-height: 1.8;
+    }
+    .station-tooltip::before { display: none !important; }
+    .tt-name { font-size: 12px; font-weight: 500; color: #e8eaed; margin-bottom: 4px; font-family: 'DM Sans', sans-serif; }
+    .tt-row { display: flex; justify-content: space-between; gap: 12px; color: #555; }
+    .tt-val { color: #c8f562; }
+
+    /* ISO panel */
+    .iso-row { padding: 5px 0; border-bottom: 1px solid #191d24; cursor: pointer; }
+    .iso-row:last-child { border-bottom: none; }
+    .iso-row:hover { opacity: .85; }
+    .iso-name-row { font-size: 11px; font-weight: 500; color: #bbb; display: flex; justify-content: space-between; align-items: center; }
+    .iso-lmp { font-family: 'DM Mono', monospace; font-size: 10px; }
+    .iso-bar-wrap { height: 2px; background: #1e2128; border-radius: 1px; margin-top: 4px; }
+    .iso-bar { height: 2px; border-radius: 1px; transition: width .6s; }
+    .iso-sub { font-size: 9px; color: #3a3f48; font-family: 'DM Mono', monospace; margin-top: 2px; }
+
+    #sparkCanvas { width: 100%; display: block; }
+
+    .alert-row { display: flex; align-items: center; gap: 7px; padding: 5px 0; border-bottom: 1px solid #191d24; }
+    .alert-row:last-child { border-bottom: none; }
+    .alert-dot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
+    .alert-msg { font-size: 10px; color: #777; font-family: 'DM Mono', monospace; }
+
+    /* Bottom bar */
+    .bottombar {
+      grid-column: 1/-1; background: #111418;
+      border-top: 1px solid #1e2128;
+      display: grid; grid-template-columns: repeat(5,1fr);
+      z-index: 500;
+    }
+    .stat-cell { padding: 14px 16px; border-right: 1px solid #1e2128; display: flex; flex-direction: column; gap: 3px; }
+    .stat-cell:last-child { border-right: none; }
+    .stat-lbl { font-size: 9px; font-family: 'DM Mono', monospace; color: #3a3f48; letter-spacing: 1.2px; text-transform: uppercase; }
+    .stat-num { font-size: 24px; font-weight: 500; color: #e8eaed; font-family: 'DM Mono', monospace; line-height: 1.1; }
+    .stat-unit { font-size: 11px; color: #555; }
+    .stat-trend { font-size: 10px; color: #6ee7b7; margin-top: 1px; }
+    .stat-warn  { font-size: 10px; color: #fb923c; margin-top: 1px; }
+
+    /* Story panel */
+    #storyPanel {
+      display: none; position: absolute;
+      bottom: 12px; left: 50%; transform: translateX(-50%);
+      background: rgba(13,15,18,0.97); border: 1px solid #2a2f38;
+      border-radius: 10px; padding: 16px 20px; width: 460px;
+      z-index: 1100; font-size: 12px; line-height: 1.7; color: #aaa;
+    }
+    #storyPanel h3 { font-size: 13px; color: #c8f562; font-family: 'DM Mono', monospace; margin-bottom: 10px; letter-spacing: 1px; }
+    #storyPanel .close-btn { position: absolute; top: 10px; right: 12px; background: none; border: none; color: #555; cursor: pointer; font-size: 16px; }
+    #storyPanel strong { color: #e8eaed; font-weight: 500; }
+
+    /* Leaflet overrides for dark theme */
+    .leaflet-container { background: #0d111a !important; }
+    .leaflet-control-zoom a { background: #111418 !important; color: #888 !important; border-color: #2a2f38 !important; }
+    .leaflet-control-zoom a:hover { background: #1a1f27 !important; color: #c8f562 !important; }
+    .leaflet-control-attribution { background: rgba(13,15,18,0.7) !important; color: #333 !important; font-size: 9px !important; }
+    .leaflet-control-attribution a { color: #444 !important; }
+  </style>
+</head>
+<body>
+<div class="app">
+
+  <!-- Topbar -->
+  <div class="topbar">
+    <div class="topbar-left">
+      <span class="logo">VOLTMAP</span>
+      <span class="tagline">EV GRID INTELLIGENCE</span>
+    </div>
+    <div class="live-pill"><div class="pulse"></div>LIVE</div>
+    <div id="clock">--:--:--</div>
+  </div>
+
+  <!-- Left sidebar -->
+  <div class="sidebar-left">
+    <div class="section-label">Navigation</div>
+    <div class="nav-item active" onclick="setView('dashboard',this)"><div class="nav-dot"></div>Dashboard</div>
+    <div class="nav-item" onclick="setView('map',this)"><div class="nav-dot"></div>Map Explorer</div>
+    <div class="nav-item" onclick="setView('demand',this)"><div class="nav-dot"></div>Demand Analysis</div>
+    <div class="nav-item" onclick="setView('network',this)"><div class="nav-dot"></div>Network Health</div>
+    <div class="nav-item" onclick="setView('story',this)"><div class="nav-dot"></div>Data Story</div>
+
+    <div class="section-label" style="margin-top:6px">Layers</div>
+    <div class="toggle-row">
+      <div class="toggle-label"><div class="t-dot" style="background:#c8f562"></div>Stations</div>
+      <button class="toggle on" id="t-stations" onclick="toggleLayer('stations',this)"></button>
+    </div>
+    <div class="toggle-row">
+      <div class="toggle-label"><div class="t-dot" style="background:#60a5fa"></div>Demand zones</div>
+      <button class="toggle on" id="t-demand" onclick="toggleLayer('demand',this)"></button>
+    </div>
+    <div class="toggle-row">
+      <div class="toggle-label"><div class="t-dot" style="background:#fb923c"></div>Grid stress</div>
+      <button class="toggle" id="t-stress" onclick="toggleLayer('stress',this)"></button>
+    </div>
+    <div class="toggle-row">
+      <div class="toggle-label"><div class="t-dot" style="background:#a78bfa"></div>Corridors</div>
+      <button class="toggle on" id="t-corridors" onclick="toggleLayer('corridors',this)"></button>
+    </div>
+
+    <div class="section-label" style="margin-top:6px">Filter</div>
+    <select class="filter-select" id="networkFilter" onchange="applyFilters()">
+      <option value="all">All networks</option>
+      <option value="tesla">Tesla</option>
+      <option value="electrify">Electrify America</option>
+      <option value="chargepoint">ChargePoint</option>
+    </select>
+    <select class="filter-select" id="powerFilter" onchange="applyFilters()">
+      <option value="all">All power levels</option>
+      <option value="dc">DC Fast (150kW+)</option>
+      <option value="level2">Level 2 (≤22kW)</option>
+    </select>
+  </div>
+
+  <!-- Map -->
+  <div class="map-area" id="mapArea">
+    <div id="leafletMap"></div>
+
+    <!-- Draggable generation mix panel -->
+    <div class="map-overlay" id="genPanel">
+      <div class="overlay-handle" id="panelHandle">
+        <span class="overlay-handle-title">Generation Mix · National</span>
+        <span class="drag-hint">&#9776; drag</span>
+      </div>
+      <div class="overlay-body">
+        <div class="gen-row"><span class="gen-name" style="color:#60a5fa">Natural Gas</span><div class="gen-bar-wrap"><div class="gen-bar" id="gb-gas" style="background:#60a5fa;width:38%"></div></div><span class="gen-pct" id="gp-gas">38%</span></div>
+        <div class="gen-row"><span class="gen-name" style="color:#6ee7b7">Wind</span><div class="gen-bar-wrap"><div class="gen-bar" id="gb-wind" style="background:#6ee7b7;width:22%"></div></div><span class="gen-pct" id="gp-wind">22%</span></div>
+        <div class="gen-row"><span class="gen-name" style="color:#fbbf24">Solar</span><div class="gen-bar-wrap"><div class="gen-bar" id="gb-solar" style="background:#fbbf24;width:18%"></div></div><span class="gen-pct" id="gp-solar">18%</span></div>
+        <div class="gen-row"><span class="gen-name" style="color:#a78bfa">Nuclear</span><div class="gen-bar-wrap"><div class="gen-bar" id="gb-nuke" style="background:#a78bfa;width:14%"></div></div><span class="gen-pct" id="gp-nuke">14%</span></div>
+        <div class="gen-row"><span class="gen-name" style="color:#555">Coal</span><div class="gen-bar-wrap"><div class="gen-bar" id="gb-coal" style="background:#555;width:8%"></div></div><span class="gen-pct" id="gp-coal">8%</span></div>
+      </div>
+    </div>
+
+    <div id="storyPanel">
+      <button class="close-btn" onclick="document.getElementById('storyPanel').style.display='none'">✕</button>
+      <h3>Data Story</h3>
+      <p>
+        <strong>The duck curve is real.</strong> Solar floods the grid mid-day, then drops sharply at sunset — exactly when EV demand climbs as commuters return home. This "double peak" is the defining challenge for grid operators in solar-heavy regions like CAISO.<br><br>
+        <strong>ERCOT's isolation is a hidden risk.</strong> At $16/MWh it looks cheap, but Texas cannot import power from neighboring grids during a demand spike — making it uniquely vulnerable to rapid EV load growth.<br><br>
+        <strong>Best time to charge: 10AM–2PM.</strong> Solar is peaking, prices are lowest, and grid stress is minimal. Smart charging incentives that shift demand to this window are the single highest-leverage policy intervention available today.
+      </p>
+    </div>
+  </div>
+
+  <!-- Right sidebar -->
+  <div class="sidebar-right">
+    <div class="section-label">ISO Regions · $/MWh</div>
+    <div id="isoList"></div>
+    <div class="section-label" style="margin-top:4px">EV Demand Forecast</div>
+    <canvas id="sparkCanvas" height="55"></canvas>
+    <div style="display:flex;justify-content:space-between;margin-top:2px">
+      <span style="font-size:9px;color:#333;font-family:'DM Mono',monospace">6AM</span>
+      <span style="font-size:9px;color:#c8f562;font-family:'DM Mono',monospace">NOW</span>
+      <span style="font-size:9px;color:#333;font-family:'DM Mono',monospace">10PM</span>
+    </div>
+    <div class="section-label" style="margin-top:6px">Active Alerts</div>
+    <div id="alerts"></div>
+  </div>
+
+  <!-- Bottom stats -->
+  <div class="bottombar">
+    <div class="stat-cell">
+      <div class="stat-lbl">Stations Online</div>
+      <div class="stat-num">61,432</div>
+      <div class="stat-trend">+234 this week</div>
+    </div>
+    <div class="stat-cell">
+      <div class="stat-lbl">Active Sessions</div>
+      <div class="stat-num" id="sSessions">18,847</div>
+      <div class="stat-unit">peak today: 32k</div>
+    </div>
+    <div class="stat-cell">
+      <div class="stat-lbl">Grid Draw (EV)</div>
+      <div style="display:flex;align-items:baseline;gap:4px">
+        <div class="stat-num" id="sGW">14.3</div>
+        <div class="stat-unit">GW</div>
+      </div>
+      <div class="stat-trend">+2.1 GW vs yesterday</div>
+    </div>
+    <div class="stat-cell">
+      <div class="stat-lbl">Avg Session</div>
+      <div style="display:flex;align-items:baseline;gap:4px">
+        <div class="stat-num">42</div>
+        <div class="stat-unit">kWh</div>
+      </div>
+      <div class="stat-unit">~180 mi range added</div>
+    </div>
+    <div class="stat-cell">
+      <div class="stat-lbl">Grid Alerts</div>
+      <div class="stat-num">3</div>
+      <div class="stat-warn">moderate stress</div>
+    </div>
+  </div>
+
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+/* ── Data ── */
+const isoData = [
+  { name:'CAISO', lmp:38, gw:38.9, cap:68, demand:72 },
+  { name:'ERCOT', lmp:16, gw:31.1, cap:28, demand:55 },
+  { name:'PJM',   lmp:26, gw:70.5, cap:19, demand:88 },
+  { name:'MISO',  lmp:22, gw:94.7, cap:71, demand:66 },
+  { name:'NYISO', lmp:32, gw:22.8, cap:69, demand:74 },
+  { name:'ISONE', lmp:38, gw:10.4, cap:27, demand:62 },
+  { name:'SPP',   lmp:18, gw:42.1, cap:58, demand:70 },
+];
+
+const stationData = [
+  { lat:34.05,  lng:-118.24, n:'LA Supercharger Hub',       net:'tesla',       ports:20, power:'dc',     active:17, lmp:38, stress:.30 },
+  { lat:37.77,  lng:-122.42, n:'SF Bay Corridor',            net:'electrify',   ports:12, power:'dc',     active:10, lmp:41, stress:.50 },
+  { lat:45.52,  lng:-122.68, n:'Portland Gateway',           net:'chargepoint', ports:8,  power:'level2', active:5,  lmp:24, stress:.20 },
+  { lat:33.45,  lng:-112.07, n:'Phoenix Desert Stop',        net:'tesla',       ports:16, power:'dc',     active:14, lmp:33, stress:.70 },
+  { lat:32.22,  lng:-110.97, n:'Tucson Corridor',            net:'electrify',   ports:10, power:'dc',     active:8,  lmp:35, stress:.60 },
+  { lat:35.08,  lng:-106.65, n:'Albuquerque Node',           net:'chargepoint', ports:6,  power:'level2', active:4,  lmp:28, stress:.30 },
+  { lat:32.78,  lng:-96.80,  n:'Dallas Megahub',             net:'tesla',       ports:24, power:'dc',     active:22, lmp:16, stress:.80 },
+  { lat:29.76,  lng:-95.37,  n:'Houston Energy Corridor',    net:'electrify',   ports:18, power:'dc',     active:15, lmp:18, stress:.75 },
+  { lat:35.47,  lng:-97.52,  n:'Oklahoma City',              net:'chargepoint', ports:8,  power:'level2', active:6,  lmp:20, stress:.40 },
+  { lat:39.10,  lng:-94.58,  n:'Kansas City Node',           net:'tesla',       ports:12, power:'dc',     active:10, lmp:22, stress:.35 },
+  { lat:38.63,  lng:-90.19,  n:'St. Louis Gateway',          net:'electrify',   ports:10, power:'dc',     active:9,  lmp:23, stress:.40 },
+  { lat:41.88,  lng:-87.63,  n:'Chicago Lakefront',          net:'chargepoint', ports:14, power:'dc',     active:12, lmp:25, stress:.60 },
+  { lat:42.33,  lng:-83.05,  n:'Detroit Auto Hub',           net:'tesla',       ports:16, power:'dc',     active:14, lmp:27, stress:.50 },
+  { lat:39.96,  lng:-82.99,  n:'Columbus Ohio',              net:'electrify',   ports:8,  power:'level2', active:7,  lmp:26, stress:.30 },
+  { lat:40.44,  lng:-79.99,  n:'Pittsburgh Node',            net:'chargepoint', ports:6,  power:'level2', active:5,  lmp:28, stress:.25 },
+  { lat:40.71,  lng:-74.01,  n:'NYC Tri-State Hub',          net:'tesla',       ports:22, power:'dc',     active:20, lmp:32, stress:.65 },
+  { lat:42.36,  lng:-71.06,  n:'Boston Corridor',            net:'electrify',   ports:10, power:'dc',     active:9,  lmp:38, stress:.55 },
+  { lat:38.91,  lng:-77.04,  n:'DC Metro Hub',               net:'chargepoint', ports:14, power:'dc',     active:12, lmp:30, stress:.60 },
+  { lat:35.23,  lng:-80.84,  n:'Charlotte NC',               net:'tesla',       ports:12, power:'dc',     active:10, lmp:29, stress:.40 },
+  { lat:33.75,  lng:-84.39,  n:'Atlanta Peach Hub',          net:'electrify',   ports:16, power:'dc',     active:14, lmp:31, stress:.50 },
+  { lat:25.77,  lng:-80.19,  n:'Miami Gateway',              net:'chargepoint', ports:10, power:'level2', active:7,  lmp:33, stress:.35 },
+  { lat:39.74,  lng:-104.98, n:'Denver Mile High',           net:'tesla',       ports:14, power:'dc',     active:12, lmp:29, stress:.45 },
+  { lat:41.26,  lng:-95.93,  n:'Omaha Plains',               net:'chargepoint', ports:6,  power:'level2', active:4,  lmp:21, stress:.20 },
+  { lat:40.76,  lng:-111.89, n:'Salt Lake Wasatch',          net:'tesla',       ports:10, power:'dc',     active:8,  lmp:26, stress:.30 },
+  { lat:44.98,  lng:-93.27,  n:'Minneapolis Node',           net:'electrify',   ports:10, power:'dc',     active:8,  lmp:22, stress:.35 },
+  { lat:47.61,  lng:-122.33, n:'Seattle Hub',                net:'tesla',       ports:14, power:'dc',     active:11, lmp:22, stress:.30 },
+  { lat:36.17,  lng:-115.14, n:'Las Vegas Strip',            net:'electrify',   ports:18, power:'dc',     active:16, lmp:36, stress:.65 },
+  { lat:30.33,  lng:-81.66,  n:'Jacksonville FL',            net:'chargepoint', ports:8,  power:'dc',     active:6,  lmp:30, stress:.35 },
+  { lat:43.05,  lng:-76.15,  n:'Syracuse NY',                net:'tesla',       ports:8,  power:'dc',     active:7,  lmp:31, stress:.40 },
+  { lat:36.17,  lng:-86.78,  n:'Nashville TN',               net:'electrify',   ports:12, power:'dc',     active:10, lmp:27, stress:.45 },
+];
+
+const corridorCoords = [
+  [[45.52,-122.68],[37.77,-122.42],[34.05,-118.24],[36.17,-115.14],[33.45,-112.07],[32.22,-110.97]],
+  [[32.22,-110.97],[35.08,-106.65],[32.78,-96.80],[29.76,-95.37],[30.33,-81.66],[25.77,-80.19]],
+  [[32.78,-96.80],[35.47,-97.52],[39.10,-94.58],[38.63,-90.19],[41.88,-87.63],[42.33,-83.05],[40.44,-79.99],[40.71,-74.01],[42.36,-71.06]],
+  [[40.71,-74.01],[38.91,-77.04],[35.23,-80.84],[33.75,-84.39]],
+  [[34.05,-118.24],[39.74,-104.98],[39.10,-94.58]],
+  [[47.61,-122.33],[44.98,-93.27],[41.88,-87.63],[42.33,-83.05]],
+];
+
+const demandZoneCoords = [
+  { lat:34.05, lng:-118.24, radius:120000, demand:.72 },
+  { lat:32.78, lng:-96.80,  radius:150000, demand:.88 },
+  { lat:41.88, lng:-87.63,  radius:160000, demand:.80 },
+  { lat:40.71, lng:-74.01,  radius:130000, demand:.74 },
+  { lat:39.74, lng:-104.98, radius:100000, demand:.55 },
+];
+
+/* ── Leaflet map ── */
+const map = L.map('leafletMap', {
+  center: [39.5, -98.35],
+  zoom: 4,
+  zoomControl: true,
+  attributionControl: true,
+  minZoom: 2,
+});
+
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+  attribution: '© OpenStreetMap © CARTO',
+  subdomains: 'abcd',
+  maxZoom: 19,
+}).addTo(map);
+
+/* ── Layer groups ── */
+const layerGroups = {
+  stations:  L.layerGroup().addTo(map),
+  demand:    L.layerGroup().addTo(map),
+  stress:    L.layerGroup(),
+  corridors: L.layerGroup().addTo(map),
+};
+
+const layers = { stations: true, demand: true, stress: false, corridors: true };
+
+/* ── Helpers ── */
+function netColor(net) {
+  return net === 'tesla' ? '#c8f562' : net === 'electrify' ? '#fb923c' : '#60a5fa';
+}
+function stressColor(s) {
+  return s < .4 ? '#6ee7b7' : s < .65 ? '#fbbf24' : '#f87171';
+}
+function lmpColor(lmp) {
+  return lmp > 35 ? '#f87171' : lmp > 25 ? '#fbbf24' : '#6ee7b7';
+}
+
+/* ── Draw corridors ── */
+function drawCorridors() {
+  layerGroups.corridors.clearLayers();
+  corridorCoords.forEach(pts => {
+    L.polyline(pts, { color: '#a78bfa', weight: 1.5, opacity: .35, dashArray: '6 5' })
+      .addTo(layerGroups.corridors);
+  });
+}
+
+/* ── Draw demand zones ── */
+function drawDemandZones() {
+  layerGroups.demand.clearLayers();
+  demandZoneCoords.forEach(z => {
+    L.circle([z.lat, z.lng], {
+      radius: z.radius,
+      color: '#60a5fa',
+      fillColor: '#60a5fa',
+      fillOpacity: .07 + z.demand * .1,
+      weight: 0,
+    }).addTo(layerGroups.demand);
+  });
+}
+
+/* ── Draw stations ── */
+function drawStations() {
+  layerGroups.stations.clearLayers();
+  layerGroups.stress.clearLayers();
+  const nf = document.getElementById('networkFilter').value;
+  const pf = document.getElementById('powerFilter').value;
+
+  stationData.forEach(s => {
+    if (nf !== 'all' && s.net !== nf) return;
+    if (pf !== 'all' && s.power !== pf) return;
+
+    const r = 5 + (s.ports / 24) * 5;
+    const color = netColor(s.net);
+    const util = Math.round(s.active / s.ports * 100);
+
+    const icon = L.divIcon({
+      className: '',
+      html: `<svg width="${r*2+10}" height="${r*2+10}" viewBox="0 0 ${r*2+10} ${r*2+10}" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="${r+5}" cy="${r+5}" r="${r}" fill="${color}" fill-opacity="0.9"/>
+        <circle cx="${r+5}" cy="${r+5}" r="${r+2.5}" fill="none" stroke="${stressColor(s.stress)}" stroke-width="2"
+          stroke-dasharray="${2*Math.PI*(r+2.5)*util/100} ${2*Math.PI*(r+2.5)*(100-util)/100}"
+          stroke-dashoffset="${2*Math.PI*(r+2.5)*0.25}" />
+      </svg>`,
+      iconSize: [r*2+10, r*2+10],
+      iconAnchor: [r+5, r+5],
+    });
+
+    const marker = L.marker([s.lat, s.lng], { icon })
+      .bindTooltip(`
+        <div class="tt-name">${s.n}</div>
+        <div class="tt-row">Network <span class="tt-val" style="color:${color}">${s.net}</span></div>
+        <div class="tt-row">Ports <span class="tt-val">${s.active}/${s.ports} active</span></div>
+        <div class="tt-row">Type <span class="tt-val">${s.power === 'dc' ? 'DC Fast 150kW+' : 'Level 2 ≤22kW'}</span></div>
+        <div class="tt-row">LMP <span class="tt-val">$${s.lmp}/MWh</span></div>
+        <div class="tt-row">Grid stress <span class="tt-val" style="color:${stressColor(s.stress)}">${Math.round(s.stress*100)}%</span></div>
+      `, { className: 'station-tooltip', direction: 'top', offset: [0, -(r+5)] });
+
+    marker.addTo(layerGroups.stations);
+
+    if (layers.stress) {
+      L.circle([s.lat, s.lng], {
+        radius: 40000 + s.stress * 60000,
+        color: stressColor(s.stress),
+        fillColor: stressColor(s.stress),
+        fillOpacity: .06,
+        weight: .5,
+        opacity: .3,
+      }).addTo(layerGroups.stress);
+    }
+  });
+}
+
+/* ── Toggle layers ── */
+function toggleLayer(name, btn) {
+  layers[name] = !layers[name];
+  btn.classList.toggle('on', layers[name]);
+  if (layers[name]) {
+    if (!map.hasLayer(layerGroups[name])) layerGroups[name].addTo(map);
+  } else {
+    if (map.hasLayer(layerGroups[name])) map.removeLayer(layerGroups[name]);
+  }
+  if (name === 'stress' || name === 'stations') drawStations();
+}
+
+function applyFilters() { drawStations(); }
+
+/* ── Sparkline ── */
+const SP = document.getElementById('sparkCanvas');
+const sctx = SP.getContext('2d');
+let sparkTick = 0;
+
+function drawSparkline() {
+  const w = SP.getBoundingClientRect().width;
+  const h = 55;
+  SP.width = w * devicePixelRatio;
+  SP.height = h * devicePixelRatio;
+  sctx.scale(devicePixelRatio, devicePixelRatio);
+  sctx.clearRect(0, 0, w, h);
+
+  const pts = Array.from({ length: 24 }, (_, i) => {
+    const base = i < 7 ? 28 + i*5 : i < 14 ? 55 + Math.sin(i)*8 : i < 20 ? 65 + Math.sin(i*.8)*10 : 80 - i*1.5;
+    return Math.max(15, Math.min(95, base + Math.sin(i*1.3 + sparkTick*.008)*2.5));
+  });
+
+  sctx.beginPath();
+  pts.forEach((v, i) => {
+    const x = i*(w/23), y = h - (v/100)*h;
+    i === 0 ? sctx.moveTo(x,y) : sctx.lineTo(x,y);
+  });
+  sctx.strokeStyle = '#c8f562';
+  sctx.lineWidth = 1.5;
+  sctx.stroke();
+
+  const nowX = 14*(w/23);
+  sctx.beginPath();
+  sctx.moveTo(nowX,0); sctx.lineTo(nowX,h);
+  sctx.strokeStyle = 'rgba(200,245,98,.2)';
+  sctx.lineWidth = 1;
+  sctx.setLineDash([3,3]);
+  sctx.stroke();
+  sctx.setLineDash([]);
+  sparkTick++;
+}
+
+/* ── ISO + alerts ── */
+function renderISO() {
+  document.getElementById('isoList').innerHTML = isoData.map(r => {
+    const c = lmpColor(r.lmp);
+    return `<div class="iso-row">
+      <div class="iso-name-row">${r.name}<span class="iso-lmp" style="color:${c}">$${r.lmp}/MWh</span></div>
+      <div class="iso-bar-wrap"><div class="iso-bar" style="width:${Math.round(r.demand)}%;background:${c}"></div></div>
+      <div class="iso-sub">${r.gw} GW · ${r.cap}% cap</div>
+    </div>`;
+  }).join('');
+}
+
+function renderAlerts() {
+  const alerts = [
+    { msg:'ERCOT demand spike',    color:'#fb923c' },
+    { msg:'CAISO solar ramp down', color:'#fbbf24' },
+    { msg:'PJM congestion node',   color:'#f87171' },
+  ];
+  document.getElementById('alerts').innerHTML = alerts.map(a =>
+    `<div class="alert-row"><div class="alert-dot" style="background:${a.color}"></div><span class="alert-msg">${a.msg}</span></div>`
+  ).join('');
+}
+
+/* ── Live updates ── */
+function updateGenMix() {
+  const base = [38,22,18,14,8];
+  const ids  = ['gas','wind','solar','nuke','coal'];
+  const noisy = base.map(v => Math.max(4, v + Math.round((Math.random()-.5)*4)));
+  const total = noisy.reduce((a,b)=>a+b,0);
+  ids.forEach((id,i) => {
+    const pct = Math.round(noisy[i]/total*100);
+    const bar = document.getElementById('gb-'+id);
+    const lbl = document.getElementById('gp-'+id);
+    if (bar) bar.style.width = pct+'%';
+    if (lbl) lbl.textContent = pct+'%';
+  });
+}
+
+function updateStats() {
+  document.getElementById('sSessions').textContent = (18000+Math.round(Math.random()*1200)).toLocaleString();
+  document.getElementById('sGW').textContent = (14+Math.random()*.5).toFixed(1);
+}
+
+function updateClock() {
+  document.getElementById('clock').textContent =
+    new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+}
+
+/* ── Navigation ── */
+function setView(v, el) {
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  el.classList.add('active');
+  const panel = document.getElementById('storyPanel');
+  panel.style.display = (v === 'story' && panel.style.display !== 'block') ? 'block' : 'none';
+  if (v === 'map') map.setView([39.5,-98.35],4);
+}
+
+/* ── Drag logic for generation mix panel ── */
+(function() {
+  const panel  = document.getElementById('genPanel');
+  const handle = document.getElementById('panelHandle');
+  let dragging = false, ox = 0, oy = 0;
+
+  handle.addEventListener('mousedown', e => {
+    dragging = true;
+    const rect = panel.getBoundingClientRect();
+    ox = e.clientX - rect.left;
+    oy = e.clientY - rect.top;
+    panel.style.transition = 'none';
+    e.preventDefault();
+  });
+
+  document.addEventListener('mousemove', e => {
+    if (!dragging) return;
+    const mapRect = document.getElementById('mapArea').getBoundingClientRect();
+    let nx = e.clientX - mapRect.left - ox;
+    let ny = e.clientY - mapRect.top  - oy;
+    nx = Math.max(0, Math.min(nx, mapRect.width  - panel.offsetWidth));
+    ny = Math.max(0, Math.min(ny, mapRect.height - panel.offsetHeight));
+    panel.style.left = nx + 'px';
+    panel.style.top  = ny + 'px';
+  });
+
+  document.addEventListener('mouseup', () => { dragging = false; });
+
+  /* Touch support */
+  handle.addEventListener('touchstart', e => {
+    dragging = true;
+    const t = e.touches[0];
+    const rect = panel.getBoundingClientRect();
+    ox = t.clientX - rect.left;
+    oy = t.clientY - rect.top;
+    e.preventDefault();
+  }, { passive: false });
+
+  document.addEventListener('touchmove', e => {
+    if (!dragging) return;
+    const t = e.touches[0];
+    const mapRect = document.getElementById('mapArea').getBoundingClientRect();
+    let nx = t.clientX - mapRect.left - ox;
+    let ny = t.clientY - mapRect.top  - oy;
+    nx = Math.max(0, Math.min(nx, mapRect.width  - panel.offsetWidth));
+    ny = Math.max(0, Math.min(ny, mapRect.height - panel.offsetHeight));
+    panel.style.left = nx + 'px';
+    panel.style.top  = ny + 'px';
+    e.preventDefault();
+  }, { passive: false });
+
+  document.addEventListener('touchend', () => { dragging = false; });
+})();
+
+/* ── Init ── */
+drawCorridors();
+drawDemandZones();
+drawStations();
+renderISO();
+renderAlerts();
+
+let t = 0;
+function tick() {
+  drawSparkline();
+  updateClock();
+  if (t % 300 === 0) updateGenMix();
+  if (t % 150 === 0) updateStats();
+  t++;
+  setTimeout(tick, 200);
+}
+tick();
+</script>
+</body>
+</html>
